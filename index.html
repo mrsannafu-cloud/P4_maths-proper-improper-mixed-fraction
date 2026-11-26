@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>分數星際戰：隕石獵人 3.0 卡通版</title>
+    <style>
+        body { margin: 0; background: #000; color: #fff; font-family: '微軟正黑體', sans-serif; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        canvas { border: 4px solid #555; background: #000b1e; cursor: none; }
+        #ui { position: absolute; top: 20px; left: 20px; pointer-events: none; }
+        #hint-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(20, 20, 60, 0.95); padding: 30px; border: 3px solid #ffcc00; display: none; text-align: center; max-width: 500px; z-index: 100; border-radius: 20px; box-shadow: 0 0 20px #ffcc00; }
+        .btn { background: #ffcc00; color: #000; border: none; padding: 12px 25px; font-weight: bold; cursor: pointer; font-size: 18px; border-radius: 30px; transition: 0.3s; }
+        .btn:hover { transform: scale(1.1); background: #fff; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <div id="info" style="font-size: 22px; color: #0ff; font-weight: bold;"></div>
+    <div id="hp-bar-container" style="width: 200px; height: 25px; border: 3px solid #fff; border-radius: 15px; margin-top: 10px; display:none; overflow:hidden;">
+        <div id="hp-bar" style="width: 100%; height: 100%; background: linear-gradient(to right, #f00, #0f0);"></div>
+    </div>
+    <div id="target-display" style="font-size: 28px; color: #ff0; margin-top: 10px; font-weight: bold; text-shadow: 2px 2px #000;"></div>
+</div>
+
+<div id="hint-overlay">
+    <h2 id="hint-title" style="color: #ffcc00; font-size: 30px;">🚀 宇宙小百科</h2>
+    <div id="hint-content" style="text-align: left; line-height: 1.8; font-size: 19px; margin-bottom: 20px; color: #eee;"></div>
+    <button id="hint-btn" class="btn" onclick="handleHintClick()">收到！繼續任務</button>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = 800;
+canvas.height = 600;
+
+let gameState = 'MENU';
+let score = 0, penalty = 0, hp = 100, level = 1, missedCount = 0;
+let asteroids = [], bullets = [], stars = [];
+let shipType = '', frameCount = 0, targetSpawned = 0, totalSpawned = 0;
+
+const ship = { x: 380, y: 520, width: 50, height: 50, speed: 9, flash: 0 };
+const keys = {};
+
+// 初始化星空背景
+for(let i=0; i<80; i++) {
+    stars.push({x: Math.random()*canvas.width, y: Math.random()*canvas.height, size: Math.random()*2, speed: Math.random()*2+1});
+}
+
+// 繪製卡通飛船
+function drawShip(x, y, isFlash) {
+    ctx.save();
+    ctx.translate(x + 25, y + 25);
+    if(isFlash) ctx.filter = 'brightness(2) drop-shadow(0 0 10px red)';
+    
+    // 機身
+    ctx.fillStyle = "#3399ff";
+    ctx.beginPath();
+    ctx.moveTo(0, -25);
+    ctx.lineTo(-20, 20);
+    ctx.lineTo(20, 20);
+    ctx.closePath();
+    ctx.fill();
+    
+    // 駕駛艙
+    ctx.fillStyle = "#adebff";
+    ctx.beginPath();
+    ctx.arc(0, -5, 8, 0, Math.PI*2);
+    ctx.fill();
+
+    // 噴火
+    if(frameCount % 10 < 5) {
+        ctx.fillStyle = "#ff6600";
+        ctx.beginPath();
+        ctx.moveTo(-10, 20);
+        ctx.lineTo(0, 35);
+        ctx.lineTo(10, 20);
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// 繪製卡通隕石
+function drawAsteroid(ast) {
+    ctx.save();
+    ctx.translate(ast.x, ast.y);
+    
+    // 隕石主體
+    ctx.fillStyle = "#8d6e63";
+    ctx.beginPath();
+    for(let i=0; i<8; i++) {
+        let angle = (i / 8) * Math.PI * 2;
+        let r = ast.radius + (Math.sin(i * 1.5) * 5);
+        let px = Math.cos(angle) * r;
+        let py = Math.sin(angle) * r;
+        if(i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#5d4037";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // 隕石坑洞
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath(); ctx.arc(-10, -5, 8, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(12, 10, 5, 0, Math.PI*2); ctx.fill();
+
+    // 分數文字顯示
+    drawVerticalFraction(0, 0, ast.data, "#fff");
+    ctx.restore();
+}
+
+function drawVerticalFraction(x, y, data, color) {
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    const d = data.display;
+    ctx.shadowBlur = 4; ctx.shadowColor = "black";
+    if (d.whole !== '') {
+        ctx.font = "bold 24px 'Arial Black'";
+        ctx.fillText(d.whole, x - 22, y + 10);
+        ctx.font = "bold 16px 'Arial Black'";
+        ctx.fillText(d.top, x + 15, y - 5);
+        ctx.fillText(d.bottom, x + 15, y + 20);
+        ctx.fillRect(x + 2, y + 3, 26, 3);
+    } else {
+        ctx.font = "bold 20px 'Arial Black'";
+        ctx.fillText(d.top, x, y - 6);
+        ctx.fillText(d.bottom, x, y + 22);
+        ctx.fillRect(x - 15, y + 4, 30, 3);
+    }
+    ctx.shadowBlur = 0;
+}
+
+// 遊戲邏輯與原本相同，僅更新繪圖部分
+function initGame(type) {
+    shipType = type; score = 0; penalty = 0; hp = 100; missedCount = 0;
+    asteroids = []; bullets = []; totalSpawned = 0; targetSpawned = 0;
+    gameState = 'PLAYING';
+    document.getElementById('hp-bar-container').style.display = 'block';
+    const names = {proper: "真分數", improper: "假分數", mixed: "帶分數"};
+    document.getElementById('target-display').innerText = `捕捉目標：${names[type]}`;
+}
+
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (gameState === 'MENU') {
+        if (e.key === '1') initGame('proper');
+        if (e.key === '2') initGame('improper');
+        if (e.key === '3') initGame('mixed');
+    }
+    if (e.code === 'Space' && gameState === 'PLAYING') {
+        bullets.push({ x: ship.x + 25, y: ship.y, speed: 14 });
+    }
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+function handleHintClick() {
+    if (gameState === 'HINT') { missedCount = 0; gameState = 'PLAYING'; document.getElementById('hint-overlay').style.display = "none"; }
+    else if (gameState === 'GAMEOVER') { location.reload(); }
+}
+
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 繪製背景星空
+    stars.forEach(s => {
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(s.x, s.y, s.size, s.size);
+        s.y += s.speed;
+        if(s.y > canvas.height) s.y = -5;
+    });
+
+    if (gameState === 'MENU') {
+        ctx.fillStyle = "#ffcc00";
+        ctx.font = "bold 50px 微軟正黑體";
+        ctx.textAlign = "center";
+        ctx.fillText("分數星際戰 3.0", canvas.width/2, 180);
+        ctx.fillStyle = "#fff";
+        ctx.font = "24px 微軟正黑體";
+        ctx.fillText("請按數字鍵選擇你的卡通戰機：", canvas.width/2, 280);
+        ctx.fillStyle = "#0ff";
+        ctx.fillText("1. 真分數戰機 | 2. 假分數戰機 | 3. 帶分數戰機", canvas.width/2, 340);
+    } else if (gameState === 'PLAYING') {
+        const hpBar = document.getElementById('hp-bar');
+        hpBar.style.width = hp + "%";
+
+        if (keys['ArrowLeft'] && ship.x > 0) ship.x -= ship.speed;
+        if (keys['ArrowRight'] && ship.x < canvas.width - 50) ship.x += ship.speed;
+        
+        drawShip(ship.x, ship.y, ship.flash > 0);
+        if(ship.flash > 0) ship.flash--;
+
+        if (frameCount % 60 === 0 && totalSpawned < 40) {
+            let ast = new Asteroid();
+            asteroids.push(ast);
+            totalSpawned++;
+        }
+
+        asteroids.forEach((ast, aIdx) => {
+            ast.update();
+            drawAsteroid(ast);
+
+            if (Math.hypot((ship.x+25) - ast.x, (ship.y+25) - ast.y) < ast.radius + 20) {
+                hp -= 20; ship.flash = 15;
+                asteroids.splice(aIdx, 1);
+                if (hp <= 0) showGameOver("喔不！飛船沒能量了！");
+            }
+
+            bullets.forEach((b, bIdx) => {
+                if (Math.hypot(b.x - ast.x, b.y - ast.y) < ast.radius) {
+                    if (ast.data.type === shipType) score += 10;
+                    else { score -= 5; penalty += 5; missedCount++; }
+                    asteroids.splice(aIdx, 1); bullets.splice(bIdx, 1);
+                }
+            });
+            if (ast.y > canvas.height) asteroids.splice(aIdx, 1);
+        });
+
+        bullets.forEach((b, i) => {
+            b.y -= b.speed;
+            ctx.fillStyle = "#ffff00";
+            ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI*2); ctx.fill();
+            if (b.y < 0) bullets.splice(i, 1);
+        });
+
+        document.getElementById('info').innerText = `得分: ${score} | 扣分: ${penalty}`;
+        if (missedCount > 4) showHint();
+        if (totalSpawned >= 40 && asteroids.length === 0) {
+            if (penalty < 15) { level++; alert("過關！難度提升！"); initGame(shipType); }
+            else showGameOver("判斷錯誤太多，回基地重新訓練吧！");
+        }
+    }
+    frameCount++;
+    requestAnimationFrame(gameLoop);
+}
+
+// (保留之前的生成器和顯示函數邏輯...)
+function showHint() {
+    gameState = 'HINT';
+    const overlay = document.getElementById('hint-overlay');
+    document.getElementById('hint-content').innerHTML = `
+        <p>🛸 <b>真分數：</b>分子比較小（如 2/3）</p>
+        <p>🔥 <b>假分數：</b>分子大或一樣（如 7/4, 5/5）</p>
+        <p>👑 <b>帶分數：</b>有個大數字在旁邊（如 1¾）</p>
+    `;
+    overlay.style.display = "block";
+}
+
+function showGameOver(txt) {
+    gameState = 'GAMEOVER';
+    const overlay = document.getElementById('hint-overlay');
+    document.getElementById('hint-title').innerText = "❌ 任務結束";
+    document.getElementById('hint-content').innerHTML = `<p>${txt}</p><p>最終得分：${score}</p>`;
+    document.getElementById('hint-btn').innerText = "再玩一次";
+    overlay.style.display = "block";
+}
+
+class Asteroid {
+    constructor() {
+        this.data = generateFraction();
+        this.x = Math.random() * (canvas.width - 100) + 50;
+        this.y = -60;
+        this.speed = (level * 1.4) + Math.random();
+        this.radius = 40;
+    }
+    update() { this.y += this.speed; }
+}
+
+function generateFraction() {
+    const types = ['proper', 'improper', 'mixed'];
+    const type = types[Math.floor(Math.random() * 3)];
+    let display = { top: '', bottom: '', whole: '' };
+    const den = Math.floor(Math.random() * 99) + 2; 
+    if (type === 'proper') {
+        display = { top: Math.floor(Math.random() * (den - 1)) + 1, bottom: den, whole: '' };
+    } else if (type === 'improper') {
+        display = { top: Math.floor(Math.random() * 50) + den, bottom: den, whole: '' };
+    } else {
+        display = { top: Math.floor(Math.random() * (den - 1)) + 1, bottom: den, whole: Math.floor(Math.random() * 9) + 1 };
+    }
+    return { type, display };
+}
+
+gameLoop();
+</script>
+</body>
+</html>
